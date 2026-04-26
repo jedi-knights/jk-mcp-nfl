@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Coverage
+.coverage
+htmlcov/
+coverage.xml
+coverage.json
+
+# Distribution
+dist/
+build/
+*.egg-info/
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+
+# Logs
+*.log
+
+# Local environment variables — never commit secrets
+.env
+
+# Task tracking — local only
+TODO.md
