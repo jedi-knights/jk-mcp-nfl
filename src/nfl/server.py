@@ -25,13 +25,11 @@ from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
 from .adapters.inbound.mcp_adapter import create_mcp_server
-from .adapters.outbound.caching_adapter import CachingAdapter
 from .adapters.outbound.caching_proxy import CachingProxy
 from .adapters.outbound.espn_adapter import ESPNAdapter
 from .adapters.outbound.nflverse_adapter import NFLVerseAdapter
 from .adapters.outbound.odds_adapter import OddsAPIAdapter
 from .adapters.outbound.openmeteo_adapter import OpenMeteoAdapter
-from .adapters.outbound.retry_adapter import RetryingAdapter
 from .adapters.outbound.retry_proxy import RetryingProxy
 from .application.service import NFLService
 
@@ -76,20 +74,26 @@ def build_server(
     nflverse_cache_dir: str | None = None,
     odds_api_key: str | None = None,
 ) -> FastMCP:
-    """Wire all outbound adapters → NFLService → FastMCP and return the server."""
-    adapter = ESPNAdapter(base_url=api_host)
-    # Compose cross-cutting adapters: HTTP → retry on transient errors → cache results.
-    retrying = RetryingAdapter(adapter)
-    caching = CachingAdapter(retrying)
+    """Wire all outbound adapters → NFLService → FastMCP and return the server.
+
+    Every outbound adapter is wrapped in the generic retry + caching proxies.
+    TTLs reflect each source's update cadence:
+      - ESPN league feed: 5 min default; scoreboard 60s (live game updates).
+      - nflverse parquet analytics: 10 min (files update infrequently).
+      - Open-Meteo weather: 5 min (forecasts evolve slowly).
+      - Odds API: 1 min (live lines change quickly; conserve free-tier quota).
+    """
     cache_dir = Path(nflverse_cache_dir or Path.home() / ".cache" / "jk-mcp-nfl" / "nflverse")
-    # New ports are wrapped with generic retry + caching proxies. TTLs reflect
-    # update cadence: nflverse files update infrequently (10 min), weather
-    # forecasts evolve faster (5 min), live odds change quickly (1 min).
+    espn = CachingProxy(
+        RetryingProxy(ESPNAdapter(base_url=api_host)),
+        ttl_seconds=300,
+        ttl_overrides={"get_scoreboard": 60.0},
+    )
     nflverse = CachingProxy(RetryingProxy(NFLVerseAdapter(cache_dir=cache_dir)), ttl_seconds=600)
     weather = CachingProxy(RetryingProxy(OpenMeteoAdapter()), ttl_seconds=300)
     # Live odds are optional — only wired if an API key was provided.
     odds = CachingProxy(RetryingProxy(OddsAPIAdapter(api_key=odds_api_key)), ttl_seconds=60) if odds_api_key else None
-    service = NFLService(repo=caching, data_repo=nflverse, weather_repo=weather, odds_repo=odds)
+    service = NFLService(repo=espn, data_repo=nflverse, weather_repo=weather, odds_repo=odds)
     return create_mcp_server(service, host=host, port=port)
 
 

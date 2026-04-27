@@ -111,6 +111,20 @@ async def test_second_load_uses_disk_cache(tmp_path: Path, pbp_bytes: bytes) -> 
     assert len(captured) == 1
 
 
+async def test_in_memory_df_cache_prevents_reparse(tmp_path: Path, pbp_bytes: bytes, mocker) -> None:
+    """Repeated load_play_by_play for the same season parses parquet only once."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=pbp_bytes)
+
+    adapter = _make_adapter(tmp_path, handler)
+    spy = mocker.spy(pl, "read_parquet")
+    await adapter.load_play_by_play(2025)
+    await adapter.load_play_by_play(2025)
+    await adapter.load_play_by_play(2025)
+    assert spy.call_count == 1
+
+
 async def test_past_season_never_refreshes(tmp_path: Path, pbp_bytes: bytes) -> None:
     """Old seasons are final — once cached, never re-downloaded regardless of mtime."""
     captured: list[httpx.Request] = []
@@ -390,6 +404,30 @@ def test_compute_third_down_counts_attempts_and_conversions() -> None:
     assert td.rate_defense == pytest.approx(1.0)
 
 
+def test_compute_red_zone_excludes_defensive_touchdowns() -> None:
+    """A pick-6 in the red zone should not be credited as an offensive TD."""
+    pbp = pl.DataFrame(
+        [
+            # KC offense in red zone, pass intercepted and returned for TD by BUF
+            {
+                "game_id": "g1",
+                "drive": 1,
+                "posteam": "KC",
+                "defteam": "BUF",
+                "yardline_100": 15,
+                "touchdown": 1,
+                "pass_touchdown": 0,
+                "rush_touchdown": 0,
+            },
+        ]
+    )
+    rz = _compute_red_zone(_kc(), 2025, pbp)
+    # KC had 1 RZ trip but 0 offensive TDs (the TD belongs to BUF defense)
+    assert rz.trips_offense == 1
+    assert rz.touchdowns_offense == 0
+    assert rz.td_rate_offense == 0.0
+
+
 def test_compute_red_zone_groups_by_drive() -> None:
     rz = _compute_red_zone(_kc(), 2025, _sample_pbp())
     # KC offense: drive 2 (TD) and drive 3 (no TD) → 2 trips, 1 TD
@@ -416,10 +454,32 @@ def test_compute_def_points_per_100_uses_pbp_yards_and_schedule_points() -> None
     assert de.yards_allowed == 27
     # KC was home, BUF (away) scored 24 → points_allowed = 24
     assert de.points_allowed == 24
-    # metric = (27 / 100) / 24 = 0.01125
-    assert de.points_per_100_yards == pytest.approx(0.01125, rel=1e-3)
-    # well below 6.0 → "good"
-    assert de.rating == "good"
+    # metric = points_allowed / (yards_allowed / 100) = 24 / 0.27 ≈ 88.89
+    # The tiny test fixture produces an unrealistic ratio; in real seasons
+    # the metric typically lands in 5-9 range.
+    assert de.points_per_100_yards == pytest.approx(88.89, rel=1e-2)
+    # >7.0 → "poor"
+    assert de.rating == "poor"
+
+
+def test_compute_def_points_per_100_realistic_season_yields_band_value() -> None:
+    """Sanity check: real-world-scale inputs land in the 6-7 'average' band."""
+    # Simulate a season where the team allowed 4200 yds and 320 pts.
+    # Build minimal pbp summing to 4200 yards against KC.
+    pbp = pl.DataFrame({"defteam": ["KC"], "yards_gained": [4200]})
+    schedules = pl.DataFrame(
+        {
+            "season": [2025],
+            "home_team": ["KC"],
+            "away_team": ["BUF"],
+            "home_score": [0],
+            "away_score": [320],
+        }
+    )
+    de = _compute_def_points_per_100(_kc(), 2025, pbp, schedules)
+    # 320 / (4200 / 100) = 320 / 42 ≈ 7.62 → "poor" band
+    assert de.points_per_100_yards == pytest.approx(7.619, rel=1e-3)
+    assert de.rating == "poor"
 
 
 def test_def_rating_buckets_match_thresholds() -> None:

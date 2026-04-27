@@ -21,7 +21,10 @@ logger = logging.getLogger(__name__)
 
 
 class RetryingProxy:
-    """Wraps any async port with exponential-backoff retry on UpstreamAPIError."""
+    """Wraps any async port with exponential-backoff retry on UpstreamAPIError.
+
+    Wrappers are memoized so attribute access is O(1) after the first call.
+    """
 
     def __init__(
         self,
@@ -34,11 +37,21 @@ class RetryingProxy:
         self._max_attempts = max(1, max_attempts)
         self._delay_seconds = delay_seconds
         self._sleep = sleep
+        self._wrappers: dict[str, Callable] = {}
 
     def __getattr__(self, name: str) -> Callable:
+        cached_wrapper = self._wrappers.get(name)
+        if cached_wrapper is not None:
+            return cached_wrapper
         attr = getattr(self._inner, name)
         if not callable(attr):
             return attr
+        wrapper = self._build_wrapper(name, attr)
+        self._wrappers[name] = wrapper
+        return wrapper
+
+    def _build_wrapper(self, name: str, attr: Callable) -> Callable:
+        """Construct the per-method async wrapper that retries on UpstreamAPIError."""
 
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
             last_error: UpstreamAPIError | None = None

@@ -36,7 +36,7 @@ Notable quotes:
 
 - Home field advantage cited at ~57% historical win rate (windailysports).
 - Extreme cold cited as 15–20% scoring decrease (windailysports).
-- "Defensive Points per 100 Yards" formula: `(yards_allowed / 100) / points_allowed`; <6.0 good, >7.0 poor (sportsbettingstats).
+- "Defensive Points per 100 Yards" formula: `points_allowed / (yards_allowed / 100)`; <6.0 good, >7.0 poor (sportsbettingstats). Lower is better — fewer points conceded per 100 yards of defense.
 - Red zone TD conversion ≥60% is the "good offense" threshold (frontproof).
 
 ## Proposed tools

@@ -62,6 +62,12 @@ async def test_not_found_does_not_retry() -> None:
     assert attempts == []
 
 
+def test_wrapper_is_memoized_per_method_name() -> None:
+    inner = _Flaky(fails_before_success=0)
+    proxy = RetryingProxy(inner)
+    assert proxy.get_data is proxy.get_data
+
+
 async def test_season_not_available_does_not_retry() -> None:
     attempts: list[None] = []
 

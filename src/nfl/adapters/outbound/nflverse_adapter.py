@@ -97,11 +97,13 @@ class NFLVerseAdapter:
         self._client = client or httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT, follow_redirects=True)
         self._max_age_hours = max_age_hours
         self._now = now
+        # In-memory cache so multiple analytics on the same season don't re-parse
+        # the same parquet file. Keyed by (dataset_tag, season).
+        self._df_cache: dict[tuple[str, int], pl.DataFrame] = {}
 
     async def load_play_by_play(self, season: int) -> pl.DataFrame:
         """Return the play-by-play parquet for a season as a polars DataFrame."""
-        path = await self._ensure_cached(_PBP, season)
-        return pl.read_parquet(path)
+        return await self._load_cached(_PBP, season)
 
     async def load_schedules(self, season: int | None = None) -> pl.DataFrame:
         """Return the schedules parquet, optionally filtered to a single season.
@@ -110,14 +112,23 @@ class NFLVerseAdapter:
         `season` argument filters in-process after the load.
         """
         anchor_season = season if season is not None else _current_season(self._now())
-        path = await self._ensure_cached(_SCHEDULES, anchor_season)
-        df = pl.read_parquet(path)
+        df = await self._load_cached(_SCHEDULES, anchor_season)
         return df.filter(pl.col("season") == season) if season is not None else df
 
     async def load_rosters(self, season: int) -> pl.DataFrame:
         """Return the rosters parquet for a season as a polars DataFrame."""
-        path = await self._ensure_cached(_ROSTERS, season)
-        return pl.read_parquet(path)
+        return await self._load_cached(_ROSTERS, season)
+
+    async def _load_cached(self, dataset: _Dataset, season: int) -> pl.DataFrame:
+        """Return a cached DataFrame for (dataset, season), parsing parquet on miss."""
+        key = (dataset.tag, season)
+        cached = self._df_cache.get(key)
+        if cached is not None:
+            return cached
+        path = await self._ensure_cached(dataset, season)
+        df = pl.read_parquet(path)
+        self._df_cache[key] = df
+        return df
 
     # ----- NFLDataPort analytical methods (consumed by NFLService) -----
 
@@ -312,23 +323,42 @@ def _compute_red_zone(team: Team, season: int, pbp: pl.DataFrame) -> RedZoneStat
 
 
 def _red_zone_trips(rz: pl.DataFrame, team_col: str, team_abbr: str) -> tuple[int, int]:
-    """Count distinct red-zone trips and how many ended in a touchdown."""
+    """Count distinct red-zone trips and how many ended in an offensive touchdown.
+
+    Uses `pass_touchdown` + `rush_touchdown` so defensive scores (pick-6,
+    fumble-6) on the same play don't get attributed to the offense's red-zone
+    success rate. Falls back to the generic `touchdown` flag if the more
+    specific columns are absent.
+    """
     side = rz.filter(pl.col(team_col) == team_abbr)
     if side.is_empty():
         return 0, 0
-    grouped = side.group_by(["game_id", "drive"]).agg(pl.col("touchdown").max().alias("td"))
+    td_expr = _offensive_td_expr(side.columns)
+    grouped = side.group_by(["game_id", "drive"]).agg(td_expr.max().alias("td"))
     trips = grouped.height
     tds = int(grouped["td"].sum())
     return trips, tds
 
 
+def _offensive_td_expr(columns: list[str]) -> pl.Expr:
+    """Per-play offensive-TD indicator: pass_td OR rush_td, falling back to touchdown."""
+    if "pass_touchdown" in columns and "rush_touchdown" in columns:
+        return (pl.col("pass_touchdown") + pl.col("rush_touchdown")).clip(0, 1)
+    return pl.col("touchdown")
+
+
 def _compute_def_points_per_100(
     team: Team, season: int, pbp: pl.DataFrame, schedules: pl.DataFrame
 ) -> DefensiveEfficiency:
-    """Build a DefensiveEfficiency row using points-against (schedules) and yards-against (pbp)."""
+    """Build a DefensiveEfficiency row using points-against (schedules) and yards-against (pbp).
+
+    Metric is points allowed per 100 yards of defense, i.e.
+    `points_allowed / (yards_allowed / 100)`. Lower is better. The bands cited
+    by sportsbettingstats.com: <6.0 "good", 6.0-7.0 "average", >7.0 "poor".
+    """
     yards_allowed = _yards_allowed(team.abbreviation, pbp)
     points_allowed = _points_allowed(team.abbreviation, schedules)
-    metric = (yards_allowed / 100.0) / points_allowed if points_allowed > 0 else 0.0
+    metric = points_allowed / (yards_allowed / 100.0) if yards_allowed > 0 else 0.0
     return DefensiveEfficiency(
         team=team,
         season=season,
@@ -476,10 +506,22 @@ def _is_team_favorite(team_abbr: str, home_team: str, spread_line: float) -> boo
 
 
 def _is_primetime(weekday: str | None, gametime: str | None) -> bool:
-    """A game is primetime on Mon/Thu, or on Sun at or after 17:00."""
+    """A game is primetime on Mon/Thu, or on Sun at or after 17:00 local."""
     if weekday in ("Mon", "Thu"):
         return True
-    return weekday == "Sun" and gametime is not None and gametime >= "17:00"
+    if weekday != "Sun":
+        return False
+    return _kickoff_hour(gametime) >= 17
+
+
+def _kickoff_hour(gametime: str | None) -> int:
+    """Parse the hour from an HH:MM gametime string. Returns 0 on bad/missing input."""
+    if not gametime or ":" not in gametime:
+        return 0
+    try:
+        return int(gametime.split(":", 1)[0])
+    except ValueError:
+        return 0
 
 
 def _filter_situation(games: pl.DataFrame, team_abbr: str, situation: str) -> pl.DataFrame:

@@ -94,3 +94,27 @@ def test_missing_attribute_raises() -> None:
     proxy = CachingProxy(inner)
     with pytest.raises(AttributeError):
         proxy.does_not_exist  # noqa: B018
+
+
+def test_wrapper_is_memoized_per_method_name() -> None:
+    """Two attribute accesses for the same method should yield the same wrapper object."""
+    inner = _FakePort()
+    proxy = CachingProxy(inner)
+    assert proxy.get_thing is proxy.get_thing
+
+
+async def test_per_method_ttl_overrides_take_effect() -> None:
+    inner = _FakePort()
+    clock = [0.0]
+    proxy = CachingProxy(
+        inner,
+        ttl_seconds=300,
+        ttl_overrides={"get_other": 5},
+        now=lambda: clock[0],
+    )
+    await proxy.get_thing("x")  # default 300s TTL
+    await proxy.get_other()  # override 5s TTL
+    clock[0] = 6.0  # past the override TTL but well within default
+    await proxy.get_thing("x")  # cached
+    await proxy.get_other()  # re-fetched
+    assert inner.calls == 3
