@@ -16,3 +16,7 @@ class NFLNotFoundError(NFLError):
 
 class UpstreamAPIError(NFLError):
     """Raised when the upstream ESPN API returns an unexpected error (non-2xx HTTP response)."""
+
+
+class SeasonNotAvailableError(NFLError):
+    """Raised when a requested season is outside the range of available data."""

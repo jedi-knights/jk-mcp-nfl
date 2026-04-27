@@ -25,6 +25,14 @@ class _Counter:
         self.calls += 1
         return ["s"]
 
+    async def get_team_stats(self, team_id: str, season: int | None = None) -> Any:
+        self.calls += 1
+        return f"stats-{team_id}-{season}"
+
+    async def get_roster(self, team_id: str) -> list[Any]:
+        self.calls += 1
+        return [f"player-{team_id}"]
+
 
 async def test_second_call_within_ttl_is_cached() -> None:
     inner = _Counter()
@@ -62,3 +70,13 @@ async def test_scoreboard_uses_separate_ttl() -> None:
     clock[0] = 35.0
     await cache.get_scoreboard("20260105")
     assert inner.calls == 2
+
+
+async def test_new_methods_are_delegated_and_cached() -> None:
+    inner = _Counter()
+    cache = CachingAdapter(inner, now=lambda: 0.0)
+    assert await cache.get_team_stats("12", season=2025) == "stats-12-2025"
+    await cache.get_team_stats("12", season=2025)
+    await cache.get_roster("12")
+    await cache.get_roster("12")
+    assert inner.calls == 2  # one each, second calls hit cache

@@ -10,7 +10,7 @@ import logging
 from collections.abc import Callable
 
 from ...domain.exceptions import NFLNotFoundError, UpstreamAPIError
-from ...domain.models import Match, Standing, Team
+from ...domain.models import Athlete, Match, NewsItem, PlayerInjury, Standing, Team, TeamStats
 from ...ports.outbound import NFLAPIPort
 
 logger = logging.getLogger(__name__)
@@ -79,3 +79,21 @@ class RetryingAdapter:
 
     async def get_standings(self) -> list[Standing]:
         return await self._retry("get_standings")  # type: ignore[return-value]
+
+    async def get_team_stats(self, team_id: str, season: int | None = None) -> TeamStats:
+        return await self._retry("get_team_stats", team_id=team_id, season=season)  # type: ignore[return-value]
+
+    async def get_team_schedule(self, team_id: str, season: int | None = None) -> list[Match]:
+        return await self._retry("get_team_schedule", team_id=team_id, season=season)  # type: ignore[return-value]
+
+    async def get_roster(self, team_id: str) -> list[Athlete]:
+        return await self._retry("get_roster", team_id=team_id)  # type: ignore[return-value]
+
+    async def get_injuries(self, team_id: str | None = None) -> list[PlayerInjury]:
+        return await self._retry("get_injuries", team_id=team_id)  # type: ignore[return-value]
+
+    async def get_athlete(self, athlete_id: str) -> Athlete:
+        return await self._retry("get_athlete", athlete_id=athlete_id)  # type: ignore[return-value]
+
+    async def get_news(self, team_id: str | None = None, limit: int = 10) -> list[NewsItem]:
+        return await self._retry("get_news", team_id=team_id, limit=limit)  # type: ignore[return-value]

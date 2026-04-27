@@ -6,7 +6,7 @@ while parsing stays a side-effect-free, easily testable concern.
 
 from typing import Any
 
-from ...domain.models import Match, MatchCompetitor, Standing, Team
+from ...domain.models import Athlete, Match, MatchCompetitor, NewsItem, PlayerInjury, Standing, Team
 
 
 def _parse_team(raw: dict[str, Any]) -> Team:
@@ -121,3 +121,55 @@ def _split_conference_division(name: str) -> tuple[str | None, str | None]:
     if len(parts) == 2 and parts[0] in ("AFC", "NFC"):
         return parts[0], parts[1]
     return None, None
+
+
+def _position_abbreviation(raw: dict[str, Any]) -> str:
+    """Extract a position abbreviation from an ESPN athlete payload."""
+    position = raw.get("position")
+    if isinstance(position, dict):
+        return position.get("abbreviation", "")
+    return position if isinstance(position, str) else ""
+
+
+def _parse_athlete(raw: dict[str, Any]) -> Athlete:
+    """Map a raw ESPN athlete object to a domain Athlete.
+
+    The team field is populated only when the response embeds a team object.
+    """
+    team_raw = raw.get("team")
+    team = _parse_team(team_raw) if isinstance(team_raw, dict) else None
+    return Athlete(
+        id=str(raw.get("id", "")),
+        full_name=raw.get("fullName", raw.get("displayName", "")),
+        position=_position_abbreviation(raw),
+        team=team,
+        jersey=raw.get("jersey"),
+        height=raw.get("displayHeight"),
+        weight=raw.get("displayWeight"),
+        age=raw.get("age"),
+    )
+
+
+def _parse_player_injury(raw: dict[str, Any], team: Team | None = None) -> PlayerInjury:
+    """Map a raw ESPN injury entry to a domain PlayerInjury."""
+    athlete = raw.get("athlete", {})
+    return PlayerInjury(
+        player_name=athlete.get("displayName", athlete.get("fullName", "")),
+        position=_position_abbreviation(athlete),
+        status=raw.get("status", ""),
+        team=team,
+        description=raw.get("shortComment") or raw.get("longComment"),
+    )
+
+
+def _parse_news_item(raw: dict[str, Any]) -> NewsItem:
+    """Map a raw ESPN news article to a domain NewsItem."""
+    links = raw.get("links", {})
+    web = links.get("web", {}) if isinstance(links, dict) else {}
+    url = web.get("href") if isinstance(web, dict) else None
+    return NewsItem(
+        headline=raw.get("headline", ""),
+        description=raw.get("description", ""),
+        published=raw.get("published", ""),
+        url=url,
+    )

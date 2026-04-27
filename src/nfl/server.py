@@ -19,14 +19,20 @@ import json
 import logging
 import os
 import sys
+from pathlib import Path
 
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
 from .adapters.inbound.mcp_adapter import create_mcp_server
 from .adapters.outbound.caching_adapter import CachingAdapter
+from .adapters.outbound.caching_proxy import CachingProxy
 from .adapters.outbound.espn_adapter import ESPNAdapter
+from .adapters.outbound.nflverse_adapter import NFLVerseAdapter
+from .adapters.outbound.odds_adapter import OddsAPIAdapter
+from .adapters.outbound.openmeteo_adapter import OpenMeteoAdapter
 from .adapters.outbound.retry_adapter import RetryingAdapter
+from .adapters.outbound.retry_proxy import RetryingProxy
 from .application.service import NFLService
 
 
@@ -67,13 +73,23 @@ def build_server(
     host: str = "0.0.0.0",
     port: int = 8000,
     api_host: str = "https://site.api.espn.com",
+    nflverse_cache_dir: str | None = None,
+    odds_api_key: str | None = None,
 ) -> FastMCP:
-    """Wire ESPNAdapter → NFLService → FastMCP and return the server."""
+    """Wire all outbound adapters → NFLService → FastMCP and return the server."""
     adapter = ESPNAdapter(base_url=api_host)
     # Compose cross-cutting adapters: HTTP → retry on transient errors → cache results.
     retrying = RetryingAdapter(adapter)
     caching = CachingAdapter(retrying)
-    service = NFLService(repo=caching)
+    cache_dir = Path(nflverse_cache_dir or Path.home() / ".cache" / "jk-mcp-nfl" / "nflverse")
+    # New ports are wrapped with generic retry + caching proxies. TTLs reflect
+    # update cadence: nflverse files update infrequently (10 min), weather
+    # forecasts evolve faster (5 min), live odds change quickly (1 min).
+    nflverse = CachingProxy(RetryingProxy(NFLVerseAdapter(cache_dir=cache_dir)), ttl_seconds=600)
+    weather = CachingProxy(RetryingProxy(OpenMeteoAdapter()), ttl_seconds=300)
+    # Live odds are optional — only wired if an API key was provided.
+    odds = CachingProxy(RetryingProxy(OddsAPIAdapter(api_key=odds_api_key)), ttl_seconds=60) if odds_api_key else None
+    service = NFLService(repo=caching, data_repo=nflverse, weather_repo=weather, odds_repo=odds)
     return create_mcp_server(service, host=host, port=port)
 
 
@@ -90,16 +106,28 @@ def main() -> None:
     transport = os.environ.get("MCP_TRANSPORT", "stdio").lower()
     host = os.environ.get("HOST", "0.0.0.0")
     port = int(os.environ.get("PORT", "8000"))
+    nflverse_cache_dir = os.environ.get("NFLVERSE_CACHE_DIR")
+    odds_api_key = os.environ.get("ODDS_API_KEY")
 
     if transport not in _VALID_TRANSPORTS:
         raise ValueError(f"Invalid MCP_TRANSPORT={transport!r}. Must be one of: {', '.join(_VALID_TRANSPORTS)}")
 
     if transport == "streamable-http":
         logger.info("Starting NFL MCP server (streamable-http transport, %s:%s)", host, port)
-        build_server(host=host, port=port, api_host=api_host).run(transport="streamable-http")
+        build_server(
+            host=host,
+            port=port,
+            api_host=api_host,
+            nflverse_cache_dir=nflverse_cache_dir,
+            odds_api_key=odds_api_key,
+        ).run(transport="streamable-http")
     else:
         logger.info("Starting NFL MCP server (stdio transport)")
-        build_server(api_host=api_host).run(transport="stdio")
+        build_server(
+            api_host=api_host,
+            nflverse_cache_dir=nflverse_cache_dir,
+            odds_api_key=odds_api_key,
+        ).run(transport="stdio")
 
 
 if __name__ == "__main__":

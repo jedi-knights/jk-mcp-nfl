@@ -28,6 +28,12 @@ class _Flaky:
     async def get_standings(self) -> list[Any]:
         return []
 
+    async def get_athlete(self, athlete_id: str) -> Any:
+        self.attempts += 1
+        if self.attempts <= self._fails:
+            raise UpstreamAPIError("flaky")
+        return f"athlete-{athlete_id}"
+
 
 async def test_retries_until_success() -> None:
     delays: list[float] = []
@@ -65,3 +71,14 @@ async def test_not_found_does_not_retry() -> None:
     with pytest.raises(NFLNotFoundError):
         await retry.get_team("999")
     assert attempts == []
+
+
+async def test_new_method_is_retried_on_upstream_error() -> None:
+    async def sleep(_: float) -> None:
+        return None
+
+    inner = _Flaky(fails_before_success=2)
+    retry = RetryingAdapter(inner, max_attempts=3, delay_seconds=0.01, sleep=sleep)
+    result = await retry.get_athlete("3139477")
+    assert result == "athlete-3139477"
+    assert inner.attempts == 3

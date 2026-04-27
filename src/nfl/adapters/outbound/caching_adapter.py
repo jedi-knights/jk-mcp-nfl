@@ -18,7 +18,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from ...domain.models import Match, Standing, Team
+from ...domain.models import Athlete, Match, NewsItem, PlayerInjury, Standing, Team, TeamStats
 from ...ports.outbound import NFLAPIPort
 
 logger = logging.getLogger(__name__)
@@ -81,3 +81,21 @@ class CachingAdapter:
 
     async def get_standings(self) -> list[Standing]:
         return await self._get_or_fetch("get_standings", self._ttl)
+
+    async def get_team_stats(self, team_id: str, season: int | None = None) -> TeamStats:
+        return await self._get_or_fetch("get_team_stats", self._ttl, team_id=team_id, season=season)
+
+    async def get_team_schedule(self, team_id: str, season: int | None = None) -> list[Match]:
+        return await self._get_or_fetch("get_team_schedule", self._ttl, team_id=team_id, season=season)
+
+    async def get_roster(self, team_id: str) -> list[Athlete]:
+        return await self._get_or_fetch("get_roster", self._ttl, team_id=team_id)
+
+    async def get_injuries(self, team_id: str | None = None) -> list[PlayerInjury]:
+        return await self._get_or_fetch("get_injuries", self._ttl, team_id=team_id)
+
+    async def get_athlete(self, athlete_id: str) -> Athlete:
+        return await self._get_or_fetch("get_athlete", self._ttl, athlete_id=athlete_id)
+
+    async def get_news(self, team_id: str | None = None, limit: int = 10) -> list[NewsItem]:
+        return await self._get_or_fetch("get_news", self._scoreboard_ttl, team_id=team_id, limit=limit)
