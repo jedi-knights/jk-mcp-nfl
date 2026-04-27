@@ -77,6 +77,73 @@ seasons never re-download; the current season refreshes every 24 hours.
 
 ---
 
+## Example prompts
+
+Natural-language prompts a user can ask Claude (or any MCP client) and the
+tool each one fires. ESPN team IDs and athlete IDs are stable — Claude will
+typically resolve them by name first via `get_teams` / `get_athlete`.
+
+### League data
+
+| Prompt | Tool |
+|---|---|
+| "List all NFL teams" | `get_teams` |
+| "Show me details for the Kansas City Chiefs" | `get_team` |
+| "What were the NFL scores last Sunday?" | `get_scoreboard` |
+| "How are the current NFL standings looking?" | `get_standings` |
+| "How are the Bills doing this season — record, points, differential?" | `get_team_stats` |
+| "Show me the Chiefs' full schedule for 2025" | `get_team_schedule` |
+| "What's the recent head-to-head between the Chiefs and Bills?" | `get_head_to_head` |
+| "Who's on the Chiefs' active roster?" | `get_roster` |
+| "Who's on the injury report this week?" | `get_injuries` (no team) |
+| "Any Bills players hurt right now?" | `get_injuries` (team-scoped) |
+| "Tell me about Patrick Mahomes" | `get_athlete` |
+| "What's the latest NFL news?" | `get_news` |
+| "Any recent Chiefs news?" | `get_news` (team-scoped) |
+
+### Advanced stats and betting splits
+
+| Prompt | Tool |
+|---|---|
+| "How efficient is the Chiefs offense this year by EPA?" | `get_team_epa` (side=offense) |
+| "Is the Chiefs defense any good in EPA terms?" | `get_team_epa` (side=defense) |
+| "Compare the Chiefs' offensive and defensive success rates" | `get_success_rate` |
+| "How are the Chiefs converting on third down?" | `get_third_down_rate` |
+| "Are the Chiefs scoring TDs in the red zone, and how often?" | `get_red_zone_efficiency` |
+| "Is the Chiefs defense good or poor by points-per-100-yards?" | `get_def_points_per_100_yards` |
+| "What are Mahomes' advanced QB stats this season — CPOE, EPA, passer rating?" | `get_qb_advanced` |
+| "How are the Chiefs against the spread overall?" | `get_ats_record` (no situation) |
+| "How do the Chiefs do ATS as a home favorite?" | `get_ats_record` (situation=favorite) |
+| "Are Chiefs games typically over or under?" | `get_ou_record` |
+| "How do the Chiefs perform on Monday Night Football?" | `get_situational_record` (mnf) |
+| "How do the Bills do after a loss?" | `get_situational_record` (after_loss) |
+| "How do the Bears do in domes?" | `get_situational_record` (dome) |
+
+### Weather
+
+| Prompt | Tool |
+|---|---|
+| "What's the weather forecast for Sunday's Bills home game?" | `get_game_weather` |
+| "What were the conditions when the Chiefs played at Buffalo on 2025-09-15?" | `get_game_weather` (past date → archive) |
+
+### Live odds *(requires `ODDS_API_KEY`)*
+
+| Prompt | Tool |
+|---|---|
+| "What are the current spreads on this week's NFL games?" | `get_current_odds` |
+| "Show me the FanDuel lines for upcoming games" | `get_current_odds` (bookmaker=fanduel) |
+
+### Cross-tool prompts
+
+The real value comes from chaining tools. A handicapping question like
+"Should I bet the Chiefs at home this Sunday?" will typically fire a
+sequence of calls — `get_team` to resolve the ID, then several of:
+`get_team_stats`, `get_team_epa`, `get_red_zone_efficiency`,
+`get_def_points_per_100_yards`, `get_ats_record` (situation=home),
+`get_injuries`, `get_game_weather`, and (if configured) `get_current_odds`.
+
+---
+
 ## Requirements
 
 - [Python 3.13+](https://www.python.org/downloads/)
@@ -186,8 +253,8 @@ src/nfl/
 │       ├── nflverse_adapter.py   # nflverse parquet download/cache + analytics
 │       ├── openmeteo_adapter.py  # Open-Meteo weather + stadium map
 │       ├── odds_adapter.py       # The Odds API live lines (optional)
-│       ├── retry_adapter.py      # retry decorator for transient failures
-│       └── caching_adapter.py    # in-process response cache
+│       ├── retry_proxy.py        # generic retry decorator (any async port)
+│       └── caching_proxy.py      # generic TTL-cache decorator (any async port)
 ├── application/
 │   └── service.py                # use cases, orchestration across all ports
 ├── domain/
